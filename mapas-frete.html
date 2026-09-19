@@ -82,7 +82,21 @@ button:disabled{opacity:.55;cursor:progress}
     <p class="sub">Demanda, preço e prazo por destino</p>
 
     <form id="cfg" autocomplete="off" onsubmit="return false">
-      <p class="fixo">Clique para carregar a análise visual.</p>
+      <label>Cliente (nf.cliente)
+        <input id="cliente" type="number" min="1" step="1" required placeholder="Código do cliente">
+      </label>
+      <div class="dois">
+        <label>Data final
+          <input id="dataFim" type="date" min="2026-09-01" max="2026-09-30" value="2026-09-30" required>
+        </label>
+        <label>Período
+          <select id="dias">
+            <option value="7">7 dias</option>
+            <option value="15" selected>15 dias</option>
+          </select>
+        </label>
+      </div>
+      <p class="fixo">Escolha o cliente e o período para carregar a análise.</p>
       <label id="lblMetrica" hidden>Comparar preço por
         <select id="metrica">
           <option value="kg">R$/kg (soma do frete ÷ soma dos kg)</option>
@@ -230,10 +244,6 @@ const CONFIG={
   user:'',
   pass:'',
   cliente:'',
-  ini:'2026-09-01',
-  fim:'2026-09-30',
-  amIni:'2026-09-01',
-  amFim:'2026-09-15',
   amUF:1000,
   amMun:5000
 };
@@ -241,20 +251,33 @@ const S={aba:'qtd',ufSel:null,qtd:null,qtdMun:{},amUF:new Map(),amMun:{},geo:{},
 
 // ───────────────────────── configuração e rede ─────────────────────────
 function cfg(){
+  const dataFim=$('#dataFim').value;
+  const dias=+$('#dias').value;
+  if(!dataFim||![7,15].includes(dias)) throw new Error('Escolha uma data final e um período de 7 ou 15 dias.');
+  const ini=new Date(dataFim+'T00:00:00Z');
+  ini.setUTCDate(ini.getUTCDate()-(dias-1));
+  const inicio=ini.toISOString().slice(0,10);
   const c={
     ...CONFIG,
     cliente:String(CONFIG.cliente||'').replace(/\D/g,''),
+    ini:inicio,
+    fim:dataFim,
+    amIni:inicio,
+    amFim:dataFim,
+    dias,
     amUF:Math.min(10000,Math.max(100,+CONFIG.amUF||1000)),
     amMun:Math.min(10000,Math.max(100,+CONFIG.amMun||5000))
   };
+  if(!c.cliente||+c.cliente<1) throw new Error('Informe o código obrigatório do cliente.');
   if(!c.base) throw new Error('Endereço da API não configurado no código.');
   for(const [nome,d] of [['Período das contagens',c.ini],['Período das contagens',c.fim],['Período da amostra',c.amIni],['Período da amostra',c.amFim]]){
     if(!d||d<SETEMBRO[0]||d>SETEMBRO[1]) throw new Error(nome+': use datas de setembro/2026 (regra do hackathon).');
   }
   if(c.ini>c.fim||c.amIni>c.amFim) throw new Error('A data inicial vem depois da final.');
+  if(inicio<SETEMBRO[0]) throw new Error('O período precisa começar em setembro/2026.');
   return c;
 }
-const indice=()=>`quotations-${cfg().cliente||'*'}-${MES}`;
+const indice=()=>`quotations-*-${MES}`;
 const filtroPeriodo=(a,b)=>({range:{'@timestamp':{gte:a,lt:periodoFim(b),time_zone:'-03:00'}}});
 
 // no máximo 2 requisições simultâneas (regra do hackathon: 2 a 3 por grupo)
@@ -268,7 +291,7 @@ function bombear(){
 }
 function erroHttp(status,j){
   const motivo=j&&j.error&&(j.error.reason||(j.error.root_cause&&j.error.root_cause[0]&&j.error.root_cause[0].reason));
-  const base={401:'Usuário ou senha incorretos.',403:'Sem permissão para essa consulta (índice fora de quotations-*/pedidos-*?).',404:'Índice não encontrado: confira o cliente configurado no código.',400:'Consulta malformada'+(motivo?': '+motivo:'.')}[status];
+  const base={401:'Usuário ou senha incorretos.',403:'Sem permissão para essa consulta (índice fora de quotations-*/pedidos-*?).',404:'Índice de quotations de setembro/2026 não encontrado.',400:'Consulta malformada'+(motivo?': '+motivo:'.')}[status];
   return `HTTP ${status}: ${base||motivo||'erro na consulta.'}`;
 }
 function os(path,body){
@@ -301,7 +324,7 @@ async function carregarQtdUF(){
   const c=cfg();
   const r=await os(`/${indice()}/_search`,{
     size:0,track_total_hits:false,
-    query:{bool:{filter:[filtroPeriodo(c.ini,c.fim)]}},
+    query:{bool:{filter:[filtroPeriodo(c.ini,c.fim),{term:{'nf.cliente':+c.cliente}}]}},
     aggs:{uf:{terms:{field:'nf.estado',size:60}},sem_uf:{missing:{field:'nf.estado'}}}
   });
   const porUF=new Map();const desconhecidas=[];let total=0;
@@ -318,7 +341,7 @@ async function carregarQtdMun(uf){
   const c=cfg();
   const r=await os(`/${indice()}/_search`,{
     size:0,track_total_hits:false,
-    query:{bool:{filter:[filtroPeriodo(c.ini,c.fim),{terms:{'nf.estado':S.qtd.porUF.get(uf).chaves}}]}},
+    query:{bool:{filter:[filtroPeriodo(c.ini,c.fim),{term:{'nf.cliente':+c.cliente}},{terms:{'nf.estado':S.qtd.porUF.get(uf).chaves}}]}},
     aggs:{mun:{terms:{field:'nf.nome_cidade',size:1000}},sem:{missing:{field:'nf.nome_cidade'}}}
   });
   const mapa=new Map();
@@ -331,7 +354,7 @@ async function carregarQtdMun(uf){
 async function buscarAmostra(uf,tamanho){
   const c=cfg();
   const path=`/${indice()}/_search`;
-  const filtro=[filtroPeriodo(c.amIni,c.amFim),{terms:{'nf.estado':S.qtd.porUF.get(uf).chaves}}];
+  const filtro=[filtroPeriodo(c.amIni,c.amFim),{term:{'nf.cliente':+c.cliente}},{terms:{'nf.estado':S.qtd.porUF.get(uf).chaves}}];
   const base={size:tamanho,_source:CAMPOS,track_total_hits:false};
   try{
     const r=await os(path,{...base,query:{function_score:{query:{bool:{filter:filtro}},random_score:{seed:42,field:'_seq_no'},boost_mode:'replace'}}});
@@ -574,6 +597,7 @@ async function voltar(){
 }
 function carregar(){
   return executar(async()=>{
+    CONFIG.cliente=$('#cliente').value;
     cfg();
     S.qtd=null;S.qtdMun={};S.amUF=new Map();S.amMun={};S.ufSel=null;S.semAleatorio=false;
     if(camadaMun){mapa.removeLayer(camadaMun);camadaMun=null;}
