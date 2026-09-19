@@ -8,9 +8,26 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+
+def carregar_env():
+    caminho = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.isfile(caminho):
+        return
+    with open(caminho, encoding="utf-8") as arquivo:
+        for linha in arquivo:
+            linha = linha.strip()
+            if not linha or linha.startswith("#") or "=" not in linha:
+                continue
+            nome, valor = linha.split("=", 1)
+            os.environ.setdefault(nome.strip(), valor.strip().strip("\"'"))
+
+
+carregar_env()
 UPSTREAM = os.environ.get("SISFRETE_URL", "https://api.opensearch.sisfrete.com.br").rstrip("/")
-SISFRETE_USER = os.environ.get("SISFRETE_USER", "unimar-grupo-15")
-SISFRETE_PASS = os.environ.get("SISFRETE_PASS", "O4pOC6TTFdb24OjzE2LQ")
+SISFRETE_USER = os.environ.get("SISFRETE_USER", "")
+SISFRETE_PASS = os.environ.get("SISFRETE_PASS", "")
+if not SISFRETE_USER or not SISFRETE_PASS:
+    raise RuntimeError("Configure SISFRETE_USER e SISFRETE_PASS no arquivo .env ou no ambiente.")
 AUTH = "Basic " + base64.b64encode(
     f"{SISFRETE_USER}:{SISFRETE_PASS}".encode()
 ).decode()
